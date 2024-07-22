@@ -27,13 +27,16 @@ sarimax_model = load_model('models/sarimax_model.pkl')
 st.title('Sales Forecasting Application')
 st.markdown("""
 This application allows you to forecast sales for a selected product using ARIMA and SARIMAX models.
-You can upload your historical sales data and see forecasts for future sales.
+You can upload your historical sales data, select a launch date, and view forecasts for future sales.
 """)
 
 # Sidebar inputs
 st.sidebar.header('User Input Features')
 uploaded_file = st.sidebar.file_uploader("Upload Historical Sales Data", type=["csv"])
 
+# Input for launch date
+launch_date_str = st.sidebar.date_input("Select Launch Date", datetime.today())
+launch_date = pd.to_datetime(launch_date_str)
 
 def preprocess_data(data):
     # Combine YEAR and MONTH into a single date column
@@ -41,10 +44,8 @@ def preprocess_data(data):
     data.set_index('date', inplace=True)
     return data
 
-
 def moving_average(series, window_size):
     return series.rolling(window=window_size).mean()
-
 
 # Load data (uploaded by user or sample data)
 if uploaded_file is not None:
@@ -79,7 +80,6 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
         # Assuming we are forecasting based on 'RETAIL SALES'
         sales_data = filtered_data['RETAIL SALES']
 
-
         # ADF test for stationarity
         def adf_test(series):
             try:
@@ -88,7 +88,6 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
             except ValueError as e:
                 st.error(f"ADF Test Error: {e}")
                 return None
-
 
         # Check stationarity and difference if needed
         p_value = adf_test(sales_data)
@@ -110,9 +109,7 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
 
         # Define the forecast period
         forecast_periods = 12
-        last_date = sales_data.index[-1]
-        forecast_dates = [last_date + pd.DateOffset(months=i) for i in range(1, forecast_periods + 1)]
-
+        forecast_dates = [launch_date + pd.DateOffset(months=i) for i in range(1, forecast_periods + 1)]
 
         # Generate forecasts
         def generate_forecast(model, steps):
@@ -124,7 +121,6 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
             except Exception as e:
                 st.error(f"Prediction error: {e}")
                 return None
-
 
         arima_forecast = generate_forecast(trained_arima_model,
                                            forecast_periods) if trained_arima_model is not None else None
@@ -155,7 +151,6 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
                                                 continue
                 return best_order, best_seasonal_order
 
-
             best_order, best_seasonal_order = optimize_sarimax(sales_data)
         else:
             # Use default SARIMAX parameters for small datasets
@@ -174,27 +169,37 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
         sarimax_forecast = generate_forecast(trained_sarimax_model,
                                              forecast_periods) if trained_sarimax_model is not None else None
 
-        # Enhanced visualizations with Plotly
-        if sales_data is not None:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=sales_data.index, y=sales_data, mode='lines', name='Historical Sales',
-                                     line=dict(color='blue')))
+        # ARIMA Forecast Visualization
+        if arima_forecast is not None:
+            fig_arima = go.Figure()
+            fig_arima.add_trace(go.Scatter(x=sales_data.index, y=sales_data, mode='lines', name='Historical Sales',
+                                           line=dict(color='blue')))
 
-            if arima_forecast is not None:
-                fig.add_trace(go.Scatter(x=arima_forecast.index, y=arima_forecast, mode='lines', name='ARIMA Forecast',
-                                         line=dict(color='orange')))
+            fig_arima.add_trace(go.Scatter(x=arima_forecast.index, y=arima_forecast, mode='lines', name='ARIMA Forecast',
+                                            line=dict(color='orange')))
 
-            if sarimax_forecast is not None:
-                fig.add_trace(
-                    go.Scatter(x=sarimax_forecast.index, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast',
-                               line=dict(color='green')))
+            fig_arima.update_layout(title=f'{selected_product} - ARIMA Forecast',
+                                    xaxis_title='Date',
+                                    yaxis_title='Sales',
+                                    legend_title='Legend',
+                                    template='plotly_dark')
+            st.plotly_chart(fig_arima)
 
-            fig.update_layout(title=f'{selected_product} - Historical and Forecasted Sales',
-                              xaxis_title='Date',
-                              yaxis_title='Sales',
-                              legend_title='Legend',
-                              template='plotly_dark')
-            st.plotly_chart(fig)
+        # SARIMAX Forecast Visualization
+        if sarimax_forecast is not None:
+            fig_sarimax = go.Figure()
+            fig_sarimax.add_trace(go.Scatter(x=sales_data.index, y=sales_data, mode='lines', name='Historical Sales',
+                                             line=dict(color='blue')))
+
+            fig_sarimax.add_trace(go.Scatter(x=sarimax_forecast.index, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast',
+                                              line=dict(color='green')))
+
+            fig_sarimax.update_layout(title=f'{selected_product} - SARIMAX Forecast',
+                                      xaxis_title='Date',
+                                      yaxis_title='Sales',
+                                      legend_title='Legend',
+                                      template='plotly_dark')
+            st.plotly_chart(fig_sarimax)
 
         # Plot yearly predictions
         if arima_forecast is not None or sarimax_forecast is not None:
@@ -252,4 +257,4 @@ if data is not None and 'ITEM DESCRIPTION' in data.columns:
 else:
     st.write("Please upload historical sales data or ensure sample data is available.")
 
-st.write("Upload the historical sales data to get predictions.")
+st.write("Upload the historical sales data and select a launch date to get predictions.")
