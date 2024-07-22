@@ -2,3 +2,10 @@ streamlit
 statsmodels
 pandas
 scikit-learn
+pandas
+numpy
+matplotlib
+seaborn
+statsmodels
+plotly
+
