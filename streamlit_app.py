@@ -1,260 +1,154 @@
 import streamlit as st
-import pickle
 import pandas as pd
+import numpy as np
+from load_data import load_data
+from arima_sarimax_models import fit_arima, fit_sarimax, forecast
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import plotly.graph_objects as go
 from datetime import datetime
-import os
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import adfuller
 
 
-# Load models
-def load_model(filename):
-    try:
-        with open(filename, 'rb') as f:
-            model = pickle.load(f)
-        return model
-    except FileNotFoundError:
-        st.error(f"Model file '{filename}' not found. Please ensure it is in the 'models' directory.")
-        return None
+# Function to calculate accuracy metrics
+def calculate_accuracy(y_true, y_pred):
+    mse = mean_squared_error(y_true, y_pred)
+    mae = mean_absolute_error(y_true, y_pred)
+    return mse, mae
 
 
-arima_model = load_model('models/arima_model.pkl')
-sarimax_model = load_model('models/sarimax_model.pkl')
+# Load the data
+data_path = 'data/data.csv'
+data = load_data(data_path)
 
-# Page title and description
-st.title('Sales Forecasting Application')
-st.markdown("""
-This application allows you to forecast sales for a selected product using ARIMA and SARIMAX models.
-You can upload your historical sales data, select a launch date, and view forecasts for future sales.
-""")
+# Combine 'YEAR' and 'MONTH' into a 'Date' column
+data['Date'] = pd.to_datetime(data['YEAR'].astype(str) + '-' + data['MONTH'].astype(str) + '-01')
+data.set_index('Date', inplace=True)
 
 # Sidebar inputs
-st.sidebar.header('User Input Features')
-uploaded_file = st.sidebar.file_uploader("Upload Historical Sales Data", type=["csv"])
+st.sidebar.title("Model Parameters")
+item_selected = st.sidebar.selectbox("Select Item", data['ITEM DESCRIPTION'].unique())
+launch_date = st.sidebar.date_input("Select Launch Date", datetime.today())
 
-# Input for launch date
-launch_date_str = st.sidebar.date_input("Select Launch Date", datetime.today())
-launch_date = pd.to_datetime(launch_date_str)
+uploaded_file = st.sidebar.file_uploader("Upload Test Data (CSV)", type="csv")
 
-def preprocess_data(data):
-    # Combine YEAR and MONTH into a single date column
-    data['date'] = pd.to_datetime(data[['YEAR', 'MONTH']].assign(DAY=1))
-    data.set_index('date', inplace=True)
-    return data
+steps = st.sidebar.slider('Forecast Steps', min_value=1, max_value=36, value=12)
 
-def moving_average(series, window_size):
-    return series.rolling(window=window_size).mean()
+# Filter data for the selected item
+item_data = data[data['ITEM DESCRIPTION'] == item_selected]
 
-# Load data (uploaded by user or sample data)
+# Model parameters
+arima_order = (5, 1, 0)
+sarimax_order = (1, 1, 1)
+seasonal_order = (1, 1, 1, 12)
+
+# Fit models
+arima_model = fit_arima(item_data['RETAIL SALES'], arima_order)
+sarimax_model = fit_sarimax(item_data['RETAIL SALES'], sarimax_order, seasonal_order)
+
+# Forecast
+arima_forecast = forecast(arima_model, steps)
+sarimax_forecast = forecast(sarimax_model, steps)
+
+# Display results
+st.title("Sales Forecasting")
+st.write("Data for Item: ", item_selected)
+st.write(item_data.tail())
+
+# Plot ARIMA vs Historical Sales
+if arima_forecast is not None:
+    fig_arima = go.Figure()
+    fig_arima.add_trace(go.Scatter(x=item_data.index, y=item_data['RETAIL SALES'], mode='lines', name='Historical Sales', line=dict(color='blue')))
+    fig_arima.add_trace(go.Scatter(x=arima_forecast.index, y=arima_forecast, mode='lines', name='ARIMA Forecast', line=dict(color='orange')))
+    fig_arima.update_layout(title='Historical Sales vs ARIMA Forecast',
+                            xaxis_title='Date',
+                            yaxis_title='Sales',
+                            legend_title='Legend',
+                            template='plotly_dark')
+    st.plotly_chart(fig_arima)
+
+# Plot SARIMAX vs Historical Sales
+if sarimax_forecast is not None:
+    fig_sarimax = go.Figure()
+    fig_sarimax.add_trace(go.Scatter(x=item_data.index, y=item_data['RETAIL SALES'], mode='lines', name='Historical Sales', line=dict(color='blue')))
+    fig_sarimax.add_trace(go.Scatter(x=sarimax_forecast.index, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast', line=dict(color='green')))
+    fig_sarimax.update_layout(title='Historical Sales vs SARIMAX Forecast',
+                              xaxis_title='Date',
+                              yaxis_title='Sales',
+                              legend_title='Legend',
+                              template='plotly_dark')
+    st.plotly_chart(fig_sarimax)
+
+# Plot ARIMA vs SARIMAX
+if arima_forecast is not None and sarimax_forecast is not None:
+    fig_comparison = go.Figure()
+    fig_comparison.add_trace(go.Scatter(x=arima_forecast.index, y=arima_forecast, mode='lines', name='ARIMA Forecast', line=dict(color='orange')))
+    fig_comparison.add_trace(go.Scatter(x=sarimax_forecast.index, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast', line=dict(color='green')))
+    fig_comparison.update_layout(title='ARIMA vs SARIMAX Forecast Comparison',
+                                xaxis_title='Date',
+                                yaxis_title='Sales',
+                                legend_title='Legend',
+                                template='plotly_dark')
+    st.plotly_chart(fig_comparison)
+
+# Future Forecasting
+if arima_forecast is not None or sarimax_forecast is not None:
+    forecast_dates = [launch_date + pd.DateOffset(months=i) for i in range(1, steps + 1)]
+    future_dates = pd.date_range(start=forecast_dates[0], periods=steps, freq='M')
+
+    # Create a DataFrame for future forecasts
+    forecast_df = pd.DataFrame({
+        'Date': future_dates,
+        'ARIMA Forecast': arima_forecast if arima_forecast is not None else np.nan,
+        'SARIMAX Forecast': sarimax_forecast if sarimax_forecast is not None else np.nan
+    })
+
+    st.write("Future Sales Forecast")
+    st.table(forecast_df)
+
+    fig_future = go.Figure()
+    if arima_forecast is not None:
+        fig_future.add_trace(go.Scatter(x=future_dates, y=arima_forecast, mode='lines', name='ARIMA Forecast', line=dict(color='orange')))
+    if sarimax_forecast is not None:
+        fig_future.add_trace(go.Scatter(x=future_dates, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast', line=dict(color='green')))
+    fig_future.update_layout(title='Future Sales Forecast',
+                            xaxis_title='Date',
+                            yaxis_title='Sales',
+                            legend_title='Legend',
+                            template='plotly_dark')
+    st.plotly_chart(fig_future)
+
+# Accuracy calculation if test data is provided
 if uploaded_file is not None:
-    data = pd.read_csv(uploaded_file)
-    st.write("File uploaded successfully. Here is a preview:")
-    st.write(data.head())
-else:
-    sample_data_path = 'data/sample_data.csv'
-    if os.path.exists(sample_data_path):
-        data = pd.read_csv(sample_data_path)
-        st.write("No file uploaded. Using sample data:")
-        st.write(data.head())
-    else:
-        st.write("Please upload historical sales data to proceed.")
-        data = None
+    test_data = pd.read_csv(uploaded_file)
+    test_data['Date'] = pd.to_datetime(test_data['YEAR'].astype(str) + '-' + test_data['MONTH'].astype(str) + '-01')
+    test_data.set_index('Date', inplace=True)
 
-# Filter data by selected product
-if data is not None and 'ITEM DESCRIPTION' in data.columns:
-    product_list = data['ITEM DESCRIPTION'].unique()
-    selected_product = st.sidebar.selectbox('Select Product', product_list)
-    filtered_data = data[data['ITEM DESCRIPTION'] == selected_product]
+    # Filter test data for the selected item
+    test_item_data = test_data[test_data['ITEM DESCRIPTION'] == item_selected]
 
-    if filtered_data.empty:
-        st.write(f"No data available for the selected product: {selected_product}")
-    else:
-        st.write(f"Showing data for product: {selected_product}")
-        st.write(filtered_data.head())
+    # Ensure test data aligns with forecast steps
+    if len(test_item_data) >= steps:
+        test_item_data = test_item_data[:steps]
 
-        # Preprocess data
-        filtered_data = preprocess_data(filtered_data)
+        # Calculate accuracy
+        arima_mse, arima_mae = calculate_accuracy(test_item_data['RETAIL SALES'], arima_forecast[:steps])
+        sarimax_mse, sarimax_mae = calculate_accuracy(test_item_data['RETAIL SALES'], sarimax_forecast[:steps])
 
-        # Assuming we are forecasting based on 'RETAIL SALES'
-        sales_data = filtered_data['RETAIL SALES']
+        # Display accuracy tables
+        accuracy_data = {
+            'Model': ['ARIMA', 'SARIMAX'],
+            'MSE': [arima_mse, sarimax_mse],
+            'MAE': [arima_mae, sarimax_mae]
+        }
+        accuracy_df = pd.DataFrame(accuracy_data)
+        st.write("Model Accuracy Metrics")
+        st.table(accuracy_df)
 
-        # ADF test for stationarity
-        def adf_test(series):
-            try:
-                result = adfuller(series, autolag='AIC')
-                return result[1]  # p-value
-            except ValueError as e:
-                st.error(f"ADF Test Error: {e}")
-                return None
-
-        # Check stationarity and difference if needed
-        p_value = adf_test(sales_data)
-        d = 0
-        while p_value is not None and p_value > 0.05 and len(sales_data) >= 10:
-            sales_data = sales_data.diff().dropna()
-            p_value = adf_test(sales_data)
-            d += 1
-
-        # Use fixed ARIMA parameters
-        p, d, q = 1, d, 1
-
-        # Train the ARIMA model with chosen parameters
-        try:
-            trained_arima_model = ARIMA(sales_data, order=(p, d, q)).fit()
-        except Exception as e:
-            st.error(f"Error fitting ARIMA model: {e}")
-            trained_arima_model = None
-
-        # Define the forecast period
-        forecast_periods = 12
-        forecast_dates = [launch_date + pd.DateOffset(months=i) for i in range(1, forecast_periods + 1)]
-
-        # Generate forecasts
-        def generate_forecast(model, steps):
-            try:
-                forecast = model.get_forecast(steps=steps)
-                forecast_values = forecast.predicted_mean
-                forecast_values.index = forecast_dates
-                return forecast_values
-            except Exception as e:
-                st.error(f"Prediction error: {e}")
-                return None
-
-        arima_forecast = generate_forecast(trained_arima_model,
-                                           forecast_periods) if trained_arima_model is not None else None
-
-        # SARIMAX Model parameters
-        if len(sales_data) >= 10:
-            # Use optimized SARIMAX parameters
-            def optimize_sarimax(data):
-                best_aic = float('inf')
-                best_order = None
-                best_seasonal_order = None
-                for p in range(0, 3):
-                    for d in range(0, 2):
-                        for q in range(0, 3):
-                            for P in range(0, 2):
-                                for D in range(0, 2):
-                                    for Q in range(0, 2):
-                                        for s in [12]:
-                                            try:
-                                                model = SARIMAX(data, order=(p, d, q), seasonal_order=(P, D, Q, s)).fit(
-                                                    disp=False)
-                                                aic = model.aic
-                                                if aic < best_aic:
-                                                    best_aic = aic
-                                                    best_order = (p, d, q)
-                                                    best_seasonal_order = (P, D, Q, s)
-                                            except Exception as e:
-                                                continue
-                return best_order, best_seasonal_order
-
-            best_order, best_seasonal_order = optimize_sarimax(sales_data)
-        else:
-            # Use default SARIMAX parameters for small datasets
-            best_order = (1, 0, 1)
-            best_seasonal_order = (1, 0, 1, 12)
-
-        # Train the SARIMAX model with chosen parameters
-        try:
-            trained_sarimax_model = SARIMAX(sales_data, order=best_order, seasonal_order=best_seasonal_order).fit(
-                disp=False)
-        except Exception as e:
-            st.error(f"Error fitting SARIMAX model: {e}")
-            trained_sarimax_model = None
-
-        # Generate SARIMAX forecasts
-        sarimax_forecast = generate_forecast(trained_sarimax_model,
-                                             forecast_periods) if trained_sarimax_model is not None else None
-
-        # ARIMA Forecast Visualization
-        if arima_forecast is not None:
-            fig_arima = go.Figure()
-            fig_arima.add_trace(go.Scatter(x=sales_data.index, y=sales_data, mode='lines', name='Historical Sales',
-                                           line=dict(color='blue')))
-
-            fig_arima.add_trace(go.Scatter(x=arima_forecast.index, y=arima_forecast, mode='lines', name='ARIMA Forecast',
-                                            line=dict(color='orange')))
-
-            fig_arima.update_layout(title=f'{selected_product} - ARIMA Forecast',
-                                    xaxis_title='Date',
-                                    yaxis_title='Sales',
-                                    legend_title='Legend',
-                                    template='plotly_dark')
-            st.plotly_chart(fig_arima)
-
-        # SARIMAX Forecast Visualization
-        if sarimax_forecast is not None:
-            fig_sarimax = go.Figure()
-            fig_sarimax.add_trace(go.Scatter(x=sales_data.index, y=sales_data, mode='lines', name='Historical Sales',
-                                             line=dict(color='blue')))
-
-            fig_sarimax.add_trace(go.Scatter(x=sarimax_forecast.index, y=sarimax_forecast, mode='lines', name='SARIMAX Forecast',
-                                              line=dict(color='green')))
-
-            fig_sarimax.update_layout(title=f'{selected_product} - SARIMAX Forecast',
-                                      xaxis_title='Date',
-                                      yaxis_title='Sales',
-                                      legend_title='Legend',
-                                      template='plotly_dark')
-            st.plotly_chart(fig_sarimax)
-
-        # Plot yearly predictions
-        if arima_forecast is not None or sarimax_forecast is not None:
-            yearly_forecasts = pd.DataFrame()
-            if arima_forecast is not None:
-                yearly_forecasts['ARIMA'] = arima_forecast.resample('Y').sum()
-            if sarimax_forecast is not None:
-                yearly_forecasts['SARIMAX'] = sarimax_forecast.resample('Y').sum()
-
-            fig_yearly = go.Figure()
-            if 'ARIMA' in yearly_forecasts:
-                fig_yearly.add_trace(
-                    go.Bar(x=yearly_forecasts.index, y=yearly_forecasts['ARIMA'], name='ARIMA Forecast'))
-            if 'SARIMAX' in yearly_forecasts:
-                fig_yearly.add_trace(
-                    go.Bar(x=yearly_forecasts.index, y=yearly_forecasts['SARIMAX'], name='SARIMAX Forecast'))
-
-            fig_yearly.update_layout(title='Yearly Sales Forecasts',
-                                     xaxis_title='Year',
-                                     yaxis_title='Total Sales',
-                                     legend_title='Legend',
-                                     template='plotly_dark')
-            st.plotly_chart(fig_yearly)
-
-        # Written summary
-        st.markdown("### Forecast Summary")
-        if arima_forecast is not None:
-            arima_avg = arima_forecast.mean()
-            st.write(f"**ARIMA Model Forecast Average:** {arima_avg:.2f} units")
-        else:
-            st.write("ARIMA Forecast is not available.")
-
-        if sarimax_forecast is not None:
-            sarimax_avg = sarimax_forecast.mean()
-            st.write(f"**SARIMAX Model Forecast Average:** {sarimax_avg:.2f} units")
-        else:
-            st.write("SARIMAX Forecast is not available.")
-
-        st.write(f"Forecasting period: {forecast_dates[0].strftime('%B %Y')} to {forecast_dates[-1].strftime('%B %Y')}")
-
-        # Download forecast data
-        if arima_forecast is not None:
-            arima_forecast_csv = arima_forecast.to_csv().encode('utf-8')
-            st.download_button(label="Download ARIMA Forecast as CSV",
-                               data=arima_forecast_csv,
-                               file_name='arima_forecast.csv',
-                               mime='text/csv')
-        if sarimax_forecast is not None:
-            sarimax_forecast_csv = sarimax_forecast.to_csv().encode('utf-8')
-            st.download_button(label="Download SARIMAX Forecast as CSV",
-                               data=sarimax_forecast_csv,
-                               file_name='sarimax_forecast.csv',
-                               mime='text/csv')
-
-else:
-    st.write("Please upload historical sales data or ensure sample data is available.")
-
-st.write("Upload the historical sales data and select a launch date to get predictions.")
+# Distribution plots
+st.write("Sales Distribution")
+fig_dist = go.Figure()
+fig_dist.add_trace(go.Histogram(x=item_data['RETAIL SALES'], nbinsx=20, name='Sales Distribution', marker_color='rgba(255, 100, 102, 0.7)'))
+fig_dist.update_layout(title='Sales Distribution',
+                       xaxis_title='Sales',
+                       yaxis_title='Frequency',
+                       template='plotly_dark')
+st.plotly_chart(fig_dist)
